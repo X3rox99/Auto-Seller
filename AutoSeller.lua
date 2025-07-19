@@ -57,7 +57,7 @@ local canReceiveTransmogSlotIds = {
 	["INVTYPE_RANGED"] = true,
 	["INVTYPE_THROWN"] = true,
 	["INVTYPE_RANGEDRIGHT"] = true,
-	["INVTYPE_RELIC"] = true,
+	["INVTYPE_RELIC"] = true, -- Added for Legion Relics
 }
 
 local isWeaponModelSlotIds = {
@@ -187,7 +187,94 @@ function SYH:ShowPanel(loadOnly)
 		AutoSellerDB.UserBlackList = AutoSellerDB.UserBlackList or {}
 		AutoSellerDB.UserBlackListKeyWord = AutoSellerDB.UserBlackListKeyWord or {}
 
+		local showWhatWouldBeSold = function()
+			if (not SYH.SellPanel) then
+				SYH:ShowPanel(true)
+			end
+			local grayItemQuality = 0
+			local greenItemQuality = 2
+			local blueItemQuality = 3
+			local epicItemQuality = 4
+			local bSellGreen = SYH.db.profile.SellGreen
+			local bSellBlue = SYH.db.profile.SellBlue
+			local bSellEpic = SYH.db.profile.SellEpic
+			local auction_limit = SYH.db.profile.AHPriceThreshold * 10000
+			local greenBlueIlevelThreshold = SYH.db.profile.SellGreenMaxLevel
+			local epicItemIlevelThreshold = SYH.db.profile.SellEpicGearThreshold
+			local itemsToShow = {}
+			for backpack = 0, 4 do
+				for slot = 1, GetContainerNumSlots(backpack) do
+					local itemId = GetContainerItemID(backpack, slot)
+					if (itemId and not ignoredItemList[itemId]) then
+						local itemIcon, amountOfItems, _, quality, _, _, itemLink = GetContainerItemInfo(backpack, slot)
+						if (itemLink) then
+							local itemName, _, _, itemLevel, _, itemType, itemSubType, _, itemEquipLoc, _, itemSellPrice = GetItemInfo(itemLink)
+							local effectiveILvl, isPreview, baseILvl = GetDetailedItemLevelInfo(itemLink)
+							itemLevel = effectiveILvl
+							if (quality == grayItemQuality) then
+								if (not AutoSellerDB.UserBlackList[itemName]) then
+									table.insert(itemsToShow, itemLink)
+								end
+							else
+								if (AutoSellerDB.UserAutoSellList[itemName] or AutoSellerDB.UserAutoSellList[itemLink]) then
+									table.insert(itemsToShow, itemLink)
+								elseif (itemName and ((SYH.db.profile.AllowToSell[itemEquipLoc] and itemEquipLoc ~= "INVTYPE_NON_EQUIP_IGNORE")
+									or (itemEquipLoc == "INVTYPE_NON_EQUIP_IGNORE" and itemSubType == "Artifact Relic"))
+									and not AutoSellerDB.UserBlackList[itemName]) then
+									local keywordFree = true
+									local lowerItemName = string.lower(itemName)
+									for keyword, _ in pairs(AutoSellerDB.UserBlackListKeyWord) do
+										if (lowerItemName:find(keyword)) then
+											keywordFree = false
+											break
+										end
+									end
+									if (keywordFree) then
+										if ((quality == greenItemQuality and bSellGreen) or (quality == blueItemQuality and bSellBlue)) then
+											if (SYH.SellPanel.ForceSellSoulbound or not IsItemSoulbound(backpack, slot)) then
+												if (itemLevel > 5) then
+													local auction_value = SYH:GetAuctionPrice(itemLink)
+													if (auction_value < auction_limit) then
+														local valor = itemSellPrice
+														local case1 = (itemLevel < greenBlueIlevelThreshold)
+														local case2 = (valor > (SYH.db.profile.SellVendorThreshold * 10000))
+														if (case1 or case2) then
+															table.insert(itemsToShow, itemLink)
+														end
+													end
+												end
+											end
+										elseif (quality == epicItemQuality and bSellEpic) then
+											if (itemLevel <= epicItemIlevelThreshold and itemLevel > 5 and IsItemSoulbound(backpack, slot)) then
+												table.insert(itemsToShow, itemLink)
+											end
+										-- Special case: always sell Legion Relics (Artifact Relic subtype, INVTYPE_NON_EQUIP_IGNORE)
+										elseif (itemEquipLoc == "INVTYPE_NON_EQUIP_IGNORE" and itemSubType == "Artifact Relic") then
+											local valor = itemSellPrice or 0
+											itemsToShow[#itemsToShow+1] = itemLink
+										end
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+			if #itemsToShow == 0 then
+				SYH:Msg("No items would be sold.")
+			else
+				SYH:Msg("Items that would be sold:")
+				for _, link in ipairs(itemsToShow) do
+					SYH:Msg(link)
+				end
+			end
+		end
+
 		local startSellingItems = function(self)
+			if IsShiftKeyDown() then
+				showWhatWouldBeSold()
+				return
+			end
 			if (MerchantFrame and MerchantFrame:IsShown()) then
 				return SYH:Sell()
 			else
@@ -276,6 +363,7 @@ function SYH:ShowPanel(loadOnly)
 
 						editbox.text = ""
 						editbox:ClearFocus()
+						editbox:SetFocus()
 					end
 				end
 				editbox:SetEnterFunction(addToIgnore)
@@ -324,6 +412,7 @@ function SYH:ShowPanel(loadOnly)
 						SYH:Msg(text .. " " .. L["STRING_IGNORE_KEYWORDADDED"])
 						editbox2.text = ""
 						editbox2:ClearFocus()
+						editbox2:SetFocus()
 					end
 				end
 				editbox2:SetEnterFunction(add_keyword_to_ignore)
@@ -433,6 +522,7 @@ local add_to_selllist = function()
 
 						editbox.text = ""
 						editbox:ClearFocus()
+						editbox:SetFocus()
 					end
 				end
 				editbox:SetEnterFunction(add_to_selllist)
@@ -1391,7 +1481,9 @@ function SYH:Sell(onlyGrayItems)
 							itemsAvailableToSell[#itemsAvailableToSell+1] = {backpack, slot, valor, true, amountOfItems}
 
 						--green, blue, epic
-						elseif (itemName and SYH.db.profile.AllowToSell[itemEquipLoc] and not AutoSellerDB.UserBlackList[itemName]) then
+						elseif (itemName and ((SYH.db.profile.AllowToSell[itemEquipLoc] and itemEquipLoc ~= "INVTYPE_NON_EQUIP_IGNORE")
+							or (itemEquipLoc == "INVTYPE_NON_EQUIP_IGNORE" and itemSubType == "Artifact Relic"))
+							and not AutoSellerDB.UserBlackList[itemName]) then
 							local keywordFree = true
 							local lowerItemName = string.lower(itemName)
 							for keyword, _ in pairs(AutoSellerDB.UserBlackListKeyWord) do
@@ -1402,27 +1494,28 @@ function SYH:Sell(onlyGrayItems)
 							end
 
 							if (keywordFree) then
-								--green blue epic
 								if ((quality == greenItemQuality and bSellGreen) or (quality == blueItemQuality and bSellBlue)) then
 									if (SYH.SellPanel.ForceSellSoulbound or not IsItemSoulbound(backpack, slot)) then
 										if (itemLevel > 5) then
 											local auction_value = SYH:GetAuctionPrice(itemLink)
 											if (auction_value < auction_limit) then
 												local valor = itemSellPrice
-												local case1 = (itemLevel < greenBlueIlevelThreshold) --white, green and blue
+												local case1 = (itemLevel < greenBlueIlevelThreshold)
 												local case2 = (valor > (SYH.db.profile.SellVendorThreshold * 10000))
-
 												if (case1 or case2) then
 													itemsAvailableToSell[#itemsAvailableToSell+1] = {backpack, slot, valor, false, amountOfItems}
 												end
 											end
 										end
 									end
-
 								elseif (quality == epicItemQuality and bSellEpic) then
 									if (itemLevel <= epicItemIlevelThreshold and itemLevel > 5 and IsItemSoulbound(backpack, slot)) then
 										itemsAvailableToSell[#itemsAvailableToSell+1] = {backpack, slot, itemSellPrice, false, amountOfItems}
 									end
+								-- Special case: always sell Legion Relics (Artifact Relic subtype, INVTYPE_NON_EQUIP_IGNORE)
+								elseif (itemEquipLoc == "INVTYPE_NON_EQUIP_IGNORE" and itemSubType == "Artifact Relic") then
+									local valor = itemSellPrice or 0
+									itemsAvailableToSell[#itemsAvailableToSell+1] = {backpack, slot, valor, false, amountOfItems}
 								end
 							end
 						end
@@ -1441,6 +1534,20 @@ function SYH:Sell(onlyGrayItems)
 
 	if (SYH.SellThreadExec) then
 		SYH:CancelTimer (SYH.SellThreadExec)
+	end
+
+	if #itemsAvailableToSell > 0 then
+		SYH:Msg("Selling the following items:")
+		for _, item in ipairs(itemsAvailableToSell) do
+			local bag, slot, valor, _, amount = unpack(item)
+			local _, _, _, _, _, _, itemLink = GetContainerItemInfo(bag, slot)
+			local _, _, _, _, _, _, _, _, _, _, itemSellPrice = GetItemInfo(itemLink)
+			local count = amount or 1
+			local total = (itemSellPrice or 0) * count
+			if itemLink then
+				SYH:Msg(string.format("%s x%d for %s", itemLink, count, GetCoinText(total)))
+			end
+		end
 	end
 
 	SYH.SellThreadExec = SYH:ScheduleRepeatingTimer("SellThread", 0.2, itemsAvailableToSell)
